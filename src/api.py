@@ -1,18 +1,18 @@
-import requests, lxml.html, re
-from lxml import etree
+import requests, re
 from flask import Flask, request, jsonify
 from caches.Cache import Cache
-from urllib import quote
 from os import environ
+from urllib.parse import quote
+from bs4 import BeautifulSoup
 
 API_KEY = ""
 try:
     API_KEY = environ['STEAM_KEY']
-    print "Using environment variable for key."
+    print ("Using environment variable for key.")
 except KeyError:
     with open("steam.key") as key:
         API_KEY = key.readline().replace("\n", "")
-    print "Using file for key"
+    print ("Using file for key")
 
 GAME_LIBRARY_CACHE = Cache()
 GAME_INFO_CACHE = Cache()
@@ -59,7 +59,7 @@ def get_profiles():
             return bad_steam_id
     cached = {"%s"%steam_id : PROFILE_INFO_CACHE.get("%s"%steam_id) for steam_id in steam_ids}
     to_retrieve = []
-    for steam_id, cached_value in cached.iteritems():
+    for steam_id, cached_value in cached.items():
         if cached_value is None:
             to_retrieve.append(steam_id)
     if len(to_retrieve) is not 0:
@@ -139,22 +139,35 @@ def get_info_for_game():
         # raw_response = requests.get(endpoint)
         # game_info = raw_response.json()
         #TODO: So we're going to do it the wrong way... HTML PARSING GO!!
-        store_page = 'http://store.steampowered.com/app/%s'%app_id
-        page = requests.get(store_page, stream=True)
+        url = 'http://store.steampowered.com/app/%s'%app_id
+        page = requests.get(url, stream=True)
         if len(page.history) is not 0: #this is an age check.
+            print("Age gate detected on app id:  " + str(app_id))
             cookies = {'sessionid': page.cookies['sessionid'], 'birthtime':'631180801', 'lastagecheckage':'1-January-1990'}
-            page = requests.get(store_page, cookies=cookies, stream=True)
-        store_page = lxml.html.fromstring(page.text)
+            page = requests.get(url, cookies=cookies, stream=True)
+
+        store_page = BeautifulSoup(page.text.encode('utf-8'), 'html.parser')
         try:
-            title = store_page.find(".//div[@class='apphub_AppName']").text
+            title = store_page.find("div", class_="apphub_AppName").text
         except AttributeError:
-            title = store_page.find(".//title").text.replace(" on Steam", "")
+            title = store_page.find("title").text.replace(" on Steam", "")
         title = ''.join([x for x in title if ord(x) != 194])
-        categories = store_page.findall(".//div[@class='game_area_details_specs']/a")
+        specs = store_page.find_all("div", class_="game_area_details_specs")
+        categories = []
+        if specs is not None:
+            for spec in specs:
+                links = spec.find_all("a")
+                for link in links:
+                    categories.append(link)
+        else:
+            print ("Could not find any specs for app: " + app_id)
+
         is_multiplayer = False
         for attrib in categories:
-            attrib_text = etree.tostring(attrib)
-            is_multiplayer = is_multiplayer or "Multi-player" in attrib_text or "Co-op" in attrib_text
+            attrib_text = attrib.encode('utf-8').decode('utf-8')
+            is_multiplayer = "Multi-player" in attrib_text or "Co-op" in attrib_text
+            if is_multiplayer:
+                break
         image_tag = "<img src='http://cdn.akamai.steamstatic.com/steam/apps/%s/header.jpg' />"%app_id
         game_info = {"title":title, "image":image_tag, "is_multiplayer":is_multiplayer}
         GAME_INFO_CACHE.set(app_id, game_info)
